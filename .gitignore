@@ -1,0 +1,23 @@
+# Node.js
+node_modules/
+.env
+*.db
+*.sqlite
+npm-debug.log*
+.DS_Store
+/dist
+/build
+
+# VS Code
+.vscode/
+
+# Logs
+logs/
+*.log
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Others
+*.csv
