@@ -1,8 +1,8 @@
-const errorLogPath = path.join(process.cwd(), 'errores-insercion.csv');
-// Si el archivo no existe, crea encabezado
-if (!fs.existsSync(errorLogPath)) {
-  fs.writeFileSync(errorLogPath, 'Error,Fecha,Telefono,Nombre,Correo,Numero_del_contrato,Direccion,Barrio,Habeas_Data,Ciudad\n');
-}
+    const errorLogPath = path.join(process.cwd(), 'errores-insercion.csv');
+    // Si el archivo no existe, crea encabezado
+    if (!fs.existsSync(errorLogPath)) {
+      fs.writeFileSync(errorLogPath, 'Error,Fecha,Telefono,Nombre,Correo,Numero_del_contrato,Direccion,Barrio,Habeas_Data,Ciudad\n');
+    }
 import fs from 'fs';
 import path from 'path';
 import csv from 'csv-parser';
@@ -27,13 +27,30 @@ const config = {
 const csvFilePath = path.join(process.cwd(), 'data.csv');
 
 async function main() {
+    // Contar filas del CSV antes de procesar
+    let totalLineasCSV = 0;
+    await new Promise((resolve, reject) => {
+      let stream = fs.createReadStream(csvFilePath);
+      stream.on('error', reject);
+      let leftover = '';
+      stream.on('data', chunk => {
+        let str = leftover + chunk.toString();
+        let lines = str.split(/\r?\n/);
+        leftover = lines.pop();
+        totalLineasCSV += lines.length;
+      });
+      stream.on('end', () => {
+        if (leftover) totalLineasCSV++;
+        // Si hay cabecera, restar 1
+        if (totalLineasCSV > 0) totalLineasCSV--;
+        console.log(`Total de filas en el CSV (sin cabecera): ${totalLineasCSV}`);
+        resolve();
+      });
+    });
   try {
     await sql.connect(config);
-    const batchSize = 100;
-    let batch = [];
-    let totalRows = 0;
-    let totalInserted = 0;
-    let totalErrores = 0;
+  const batchSize = 100;
+  let batch = [];
 
     fs.createReadStream(csvFilePath)
       .pipe(csv({
@@ -47,15 +64,16 @@ async function main() {
           'Barrio',
           'Habeas_Data',
           'Ciudad'
-        ], separator: ','
+        ],
+        separator: ';',
+        quote: '"'
       }))
-      .on('data', async (row) => {
-        totalRows++;
+      .on('data', (row) => {
         let fechaOriginal = row.Fecha;
         let fechaSQL = null;
         try {
           let [fecha, hora, ampm] = fechaOriginal.split(/\s+/);
-          let [year, month, day] = fecha.split('-');
+          let [year, day, month] = fecha.split('-');
           let [horaStr, minStr] = hora.split(':');
           let hour = parseInt(horaStr, 10);
           if (ampm && ampm.toUpperCase() === 'PM' && hour < 12) hour += 12;
@@ -100,35 +118,25 @@ async function main() {
           Ciudad: truncate(esc(row.Ciudad), maxLen.Ciudad)
         });
         if (batch.length === batchSize) {
-          const inserted = await insertBatch(batch);
-          totalInserted += inserted.success;
-          totalErrores += inserted.error;
+          insertBatch(batch);
           batch = [];
         }
       })
       .on('end', async () => {
         if (batch.length > 0) {
-          const inserted = await insertBatch(batch);
-          totalInserted += inserted.success;
-          totalErrores += inserted.error;
+          await insertBatch(batch);
         }
         console.log('CSV procesado y registros almacenados en SQL Server.');
-        console.log(`Total filas leídas: ${totalRows}`);
-        console.log(`Total filas insertadas: ${totalInserted}`);
-        console.log(`Total filas con error: ${totalErrores}`);
         sql.close();
       });
 
     async function insertBatch(batch) {
-      if (batch.length === 0) return { success: 0, error: 0 };
-      let success = 0;
-      let error = 0;
-      const values = batch.map(r => `(${r.Fecha ? `'${r.Fecha}'` : 'NULL'},'${r.Telefono}','${r.Nombre}','${r.Correo}','${r.Numero_del_contrato}','${r.Direccion}','${r.Barrio}','${r.Habeas_Data}','${r.Ciudad}')`).join(',');
+      if (batch.length === 0) return;
+  const values = batch.map(r => `(${r.Fecha ? `'${r.Fecha}'` : 'NULL'},'${r.Telefono}','${r.Nombre}','${r.Correo}','${r.Numero_del_contrato}','${r.Direccion}','${r.Barrio}','${r.Habeas_Data}','${r.Ciudad}')`).join(',');
       const query = `INSERT INTO TALE.ClientesContactoChatBot ([Fecha],[Telefono],[Nombre],[Correo],[Numero_del_contrato],[Direccion],[Barrio],[Habeas_Data],[Ciudad]) VALUES ${values}`;
       try {
-        await new sql.Request().query(query);
+        const result = await new sql.Request().query(query);
         await new Promise(r => setTimeout(r, 500));
-        success += batch.length;
       } catch (err) {
         console.error('Error al insertar lote:', err.message);
         // Registrar los datos del batch y el error en el archivo CSV
@@ -136,9 +144,7 @@ async function main() {
           return `"${err.message.replace(/"/g, '""')}",${r.Fecha || ''},${r.Telefono || ''},${r.Nombre || ''},${r.Correo || ''},${r.Numero_del_contrato || ''},${r.Direccion || ''},${r.Barrio || ''},${r.Habeas_Data || ''},${r.Ciudad || ''}`;
         }).join('\n');
         fs.appendFileSync(errorLogPath, errorRows + '\n');
-        error += batch.length;
       }
-      return { success, error };
     }
   } catch (err) {
     console.error('Error de conexión o procesamiento:', err.message);
