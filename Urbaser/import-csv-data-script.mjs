@@ -49,86 +49,99 @@ async function main() {
     });
   try {
     await sql.connect(config);
-  const batchSize = 10; // Reducir significativamente el tamaño del lote
+  const batchSize = 100;
   let batch = [];
+  let processedCount = 0;
 
-    fs.createReadStream(csvFilePath)
-      .pipe(csv({
-        headers: [
-          'Fecha',
-          'Telefono',
-          'Nombre',
-          'Correo',
-          'Numero_del_contrato',
-          'Direccion',
-          'Barrio',
-          'Habeas_Data',
-          'Ciudad'
-        ],
-        separator: ',',
-        quote: '"'
-      }))
-      .on('data', async (row) => {
-        let fechaOriginal = row.Fecha;
-        let fechaSQL = null;
-        try {
-          let [fecha, hora, ampm] = fechaOriginal.split(/\s+/);
-          let [year, day, month] = fecha.split('-');
-          let [horaStr, minStr] = hora.split(':');
-          let hour = parseInt(horaStr, 10);
-          if (ampm && ampm.toUpperCase() === 'PM' && hour < 12) hour += 12;
-          if (ampm && ampm.toUpperCase() === 'AM' && hour === 12) hour = 0;
-          if (
-            year.length === 4 &&
-            month.length === 2 &&
-            day.length === 2 &&
-            parseInt(month, 10) >= 1 && parseInt(month, 10) <= 12 &&
-            parseInt(day, 10) >= 1 && parseInt(day, 10) <= 31
-          ) {
-            fechaSQL = `${year}-${month}-${day} ${hour.toString().padStart(2, '0')}:${minStr}:00`;
-          } else {
+    const records = [];
+    
+    // Primero, leer todos los datos en memoria
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(csvFilePath)
+        .pipe(csv({
+          headers: [
+            'Fecha',
+            'Telefono',
+            'Nombre',
+            'Correo',
+            'Numero_del_contrato',
+            'Direccion',
+            'Barrio',
+            'Habeas_Data',
+            'Ciudad'
+          ],
+          separator: ',',
+          quote: '"'
+        }))
+        .on('data', (row) => {
+          let fechaOriginal = row.Fecha;
+          let fechaSQL = null;
+          try {
+            let [fecha, hora, ampm] = fechaOriginal.split(/\s+/);
+            let [year, day, month] = fecha.split('-');
+            let [horaStr, minStr] = hora.split(':');
+            let hour = parseInt(horaStr, 10);
+            if (ampm && ampm.toUpperCase() === 'PM' && hour < 12) hour += 12;
+            if (ampm && ampm.toUpperCase() === 'AM' && hour === 12) hour = 0;
+            if (
+              year.length === 4 &&
+              month.length === 2 &&
+              day.length === 2 &&
+              parseInt(month, 10) >= 1 && parseInt(month, 10) <= 12 &&
+              parseInt(day, 10) >= 1 && parseInt(day, 10) <= 31
+            ) {
+              fechaSQL = `${year}-${month}-${day} ${hour.toString().padStart(2, '0')}:${minStr}:00`;
+            } else {
+              fechaSQL = null;
+            }
+          } catch (e) {
             fechaSQL = null;
           }
-        } catch (e) {
-          fechaSQL = null;
-        }
-        // Función para escapar comillas simples
-        const esc = v => v ? String(v).replace(/'/g, "''") : '';
-        // Truncar campos según definición de la tabla (ajusta los valores si tu tabla tiene otros límites)
-        const maxLen = {
-          Telefono: 50,
-          Nombre: 100,
-          Correo: 100,
-          Numero_del_contrato: 50,
-          Direccion: 200,
-          Barrio: 100,
-          Habeas_Data: 10,
-          Ciudad: 50
-        };
-        const truncate = (v, l) => v ? v.substring(0, l) : '';
-        batch.push({
-          Fecha: fechaSQL,
-          Telefono: truncate(esc(row.Telefono), maxLen.Telefono),
-          Nombre: truncate(esc(row.Nombre), maxLen.Nombre),
-          Correo: truncate(esc(row.Correo), maxLen.Correo),
-          Numero_del_contrato: truncate(esc(row.Numero_del_contrato), maxLen.Numero_del_contrato),
-          Direccion: truncate(esc(row.Direccion), maxLen.Direccion),
-          Barrio: truncate(esc(row.Barrio), maxLen.Barrio),
-          Habeas_Data: truncate(esc(row.Habeas_Data), maxLen.Habeas_Data),
-          Ciudad: truncate(esc(row.Ciudad), maxLen.Ciudad)
-        });
-        if (batch.length === batchSize) {
-          await insertBatch(batch); // Agregar await
-          batch = [];
-        }
-      })
-      .on('end', async () => {
-        if (batch.length > 0) {
-          await insertBatch(batch);
-        }
-        console.log('CSV procesado y registros almacenados en SQL Server.');
-        sql.close();
-      });
+          // Función para escapar comillas simples
+          const esc = v => v ? String(v).replace(/'/g, "''") : '';
+          // Truncar campos según definición de la tabla
+          const maxLen = {
+            Telefono: 50,
+            Nombre: 100,
+            Correo: 100,
+            Numero_del_contrato: 50,
+            Direccion: 200,
+            Barrio: 100,
+            Habeas_Data: 10,
+            Ciudad: 50
+          };
+          const truncate = (v, l) => v ? v.substring(0, l) : '';
+          
+          records.push({
+            Fecha: fechaSQL,
+            Telefono: truncate(esc(row.Telefono), maxLen.Telefono),
+            Nombre: truncate(esc(row.Nombre), maxLen.Nombre),
+            Correo: truncate(esc(row.Correo), maxLen.Correo),
+            Numero_del_contrato: truncate(esc(row.Numero_del_contrato), maxLen.Numero_del_contrato),
+            Direccion: truncate(esc(row.Direccion), maxLen.Direccion),
+            Barrio: truncate(esc(row.Barrio), maxLen.Barrio),
+            Habeas_Data: truncate(esc(row.Habeas_Data), maxLen.Habeas_Data),
+            Ciudad: truncate(esc(row.Ciudad), maxLen.Ciudad)
+          });
+        })
+        .on('end', () => {
+          resolve();
+        })
+        .on('error', reject);
+    });
+
+    // Ahora procesar los registros en lotes de forma secuencial
+    console.log(`Procesando ${records.length} registros en lotes de ${batchSize}...`);
+    
+    for (let i = 0; i < records.length; i += batchSize) {
+      const batch = records.slice(i, i + batchSize);
+      await insertBatch(batch);
+      processedCount += batch.length;
+      console.log(`Procesados ${processedCount}/${records.length} registros`);
+    }
+    
+    console.log('CSV procesado y registros almacenados en SQL Server.');
+    sql.close();
 
     async function insertBatch(batch) {
       if (batch.length === 0) return;
