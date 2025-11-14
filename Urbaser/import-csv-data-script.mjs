@@ -49,7 +49,7 @@ async function main() {
     });
   try {
     await sql.connect(config);
-  const batchSize = 100;
+  const batchSize = 10; // Reducir significativamente el tamaño del lote
   let batch = [];
 
     fs.createReadStream(csvFilePath)
@@ -65,10 +65,10 @@ async function main() {
           'Habeas_Data',
           'Ciudad'
         ],
-        separator: ';',
+        separator: ',',
         quote: '"'
       }))
-      .on('data', (row) => {
+      .on('data', async (row) => {
         let fechaOriginal = row.Fecha;
         let fechaSQL = null;
         try {
@@ -118,7 +118,7 @@ async function main() {
           Ciudad: truncate(esc(row.Ciudad), maxLen.Ciudad)
         });
         if (batch.length === batchSize) {
-          insertBatch(batch);
+          await insertBatch(batch); // Agregar await
           batch = [];
         }
       })
@@ -132,19 +132,24 @@ async function main() {
 
     async function insertBatch(batch) {
       if (batch.length === 0) return;
-  const values = batch.map(r => `(${r.Fecha ? `'${r.Fecha}'` : 'NULL'},'${r.Telefono}','${r.Nombre}','${r.Correo}','${r.Numero_del_contrato}','${r.Direccion}','${r.Barrio}','${r.Habeas_Data}','${r.Ciudad}')`).join(',');
-      const query = `INSERT INTO TALE.ClientesContactoChatBot ([Fecha],[Telefono],[Nombre],[Correo],[Numero_del_contrato],[Direccion],[Barrio],[Habeas_Data],[Ciudad]) VALUES ${values}`;
-      try {
-        const result = await new sql.Request().query(query);
-        await new Promise(r => setTimeout(r, 500));
-      } catch (err) {
-        console.error('Error al insertar lote:', err.message);
-        // Registrar los datos del batch y el error en el archivo CSV
-        const errorRows = batch.map(r => {
-          return `"${err.message.replace(/"/g, '""')}",${r.Fecha || ''},${r.Telefono || ''},${r.Nombre || ''},${r.Correo || ''},${r.Numero_del_contrato || ''},${r.Direccion || ''},${r.Barrio || ''},${r.Habeas_Data || ''},${r.Ciudad || ''}`;
-        }).join('\n');
-        fs.appendFileSync(errorLogPath, errorRows + '\n');
+      
+      console.log(`Insertando lote de ${batch.length} registros...`);
+      
+      // Insertar uno por uno para evitar el límite de 1000 valores
+      for (const record of batch) {
+        try {
+          const request = new sql.Request();
+          await request.query(`INSERT INTO TALE.ClientesContactoChatBot ([Fecha],[Telefono],[Nombre],[Correo],[Numero_del_contrato],[Direccion],[Barrio],[Habeas_Data],[Ciudad]) 
+            VALUES (${record.Fecha ? `'${record.Fecha}'` : 'NULL'},'${record.Telefono}','${record.Nombre}','${record.Correo}','${record.Numero_del_contrato}','${record.Direccion}','${record.Barrio}','${record.Habeas_Data}','${record.Ciudad}')`);
+        } catch (err) {
+          console.error('Error al insertar registro:', err.message);
+          // Registrar el error individual
+          const errorRow = `"${err.message.replace(/"/g, '""')}",${record.Fecha || ''},${record.Telefono || ''},${record.Nombre || ''},${record.Correo || ''},${record.Numero_del_contrato || ''},${record.Direccion || ''},${record.Barrio || ''},${record.Habeas_Data || ''},${record.Ciudad || ''}`;
+          fs.appendFileSync(errorLogPath, errorRow + '\n');
+        }
       }
+      
+      await new Promise(r => setTimeout(r, 100)); // Pequeña pausa entre lotes
     }
   } catch (err) {
     console.error('Error de conexión o procesamiento:', err.message);
